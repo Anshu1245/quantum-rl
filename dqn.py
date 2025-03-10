@@ -97,6 +97,7 @@ def create_action_map(num_qubits):
 
 # Hyperparameters
 NUM_EPISODES = 10000
+STEPS_PER_EP = 200
 BATCH_SIZE = 64
 GAMMA = 0.99  # Discount factor
 LR = 1e-4  # Learning rate
@@ -164,7 +165,7 @@ for episode in range(NUM_EPISODES):
     state = torch.Tensor(state).to(DEVICE)
     total_reward = 0
 
-    for step in range(200):  # Max steps per episode
+    for step in range(STEPS_PER_EP):  # Max steps per episode
         epsilon = get_epsilon(episode)
         action = policy_net.select_action(state, epsilon).to(DEVICE)
         
