@@ -91,6 +91,11 @@ def worker(global_model, optimizer, worker_id, args, action_map):
     num_qubits = args['NUM_QUBITS']
     d = 1
     temp = 1.0
+    eval_interval = 20         # Evaluate every 20 training episodes
+    EVAL_EPS = 10              # Number of evaluation episodes
+    EVAL_STEPS = 200           # Max steps per evaluation episode
+    success_threshold = 0.8    # Success threshold to increase d
+
 
     device = torch.device("cpu")
     local_model = CNNPolicyActorCritic(num_qubits)
@@ -167,6 +172,40 @@ def worker(global_model, optimizer, worker_id, args, action_map):
         if worker_id == 0:
           print(f"[Worker {worker_id}] Episode {episode} | Loss: {loss.item():.4f}", flush=True)
 
+    # --- EVALUATION PHASE ---
+    if episode % eval_interval == 0 and episode > 0:
+        success_rate = 0
+        with torch.no_grad():
+            for eval_ep in range(EVAL_EPS):
+                circuit = init_circuit(action_map, d, num_qubits)
+                state = circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits).astype(np.float32)
+                state = torch.Tensor(state).to(device)
+
+                for step in range(EVAL_STEPS):
+                    logits, _ = local_model.forward(state)
+                    action = torch.argmax(logits, dim=1, keepdim=True)
+
+                    qc = quantum_circuit(num_qubits, action_map[action.item()][0], action_map[action.item()][1])
+                    c_ = Clifford(qc)
+                    next_circuit = circuit.compose(c_)
+                    next_state = next_circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits).astype(np.float32)
+
+                    operator = next_state
+                    if (operator.reshape((2*num_qubits, 2*num_qubits)) == np.identity(2*num_qubits)).all():
+                        success_rate += 1
+                        break
+
+                    next_state = torch.Tensor(next_state).to(device)
+                    state = next_state
+                    circuit = next_circuit
+
+        success_rate /= EVAL_EPS
+        print(f"[Worker {worker_id}] Evaluation success rate: {success_rate:.2f}", flush=True)
+
+        if success_rate >= success_threshold:
+            d += 1
+            temp = 1.0
+            print(f"[Worker {worker_id}] Updated d to {d}.........................", flush=True)
 
 
 if __name__ == "__main__":
