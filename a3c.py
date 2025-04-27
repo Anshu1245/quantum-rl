@@ -129,7 +129,7 @@ def worker(global_model, optimizer, worker_id, args, action_map):
             next_state = torch.Tensor(next_state).to(device)
 
             probs = torch.softmax(logits, dim=-1)
-            log_prob = torch.log(probs.gather(1, action))
+            log_prob = torch.log(probs.gather(1, action) + 1e-8)
 
             log_probs.append(log_prob)
             values.append(value)
@@ -152,14 +152,19 @@ def worker(global_model, optimizer, worker_id, args, action_map):
         returns = torch.cat(returns).detach()
         values = torch.cat(values)
 
-        advantage = returns - values
+        advantage = (returns - values).detach()
 
-        # Loss
-        actor_loss = -(log_probs.squeeze() * advantage.squeeze().detach()).mean()
-        critic_loss = advantage.pow(2).mean()
-        entropy_loss = -(probs * torch.log(probs + 1e-10)).sum(dim=1).mean()
+        # Actor loss: maximize expected log(pi(a|s)) * A
+        actor_loss = -(log_probs * advantage).mean()
 
-        loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy_loss
+        # Critic loss: minimize (V(s) - R)^2
+        critic_loss = (values - returns).pow(2).mean()
+
+        # Entropy bonus: encourage exploration
+        entropy_loss = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
+
+        # Final combined loss
+        loss = actor_loss + 0.5 * critic_loss - 0.05 * entropy_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -221,9 +226,9 @@ if __name__ == "__main__":
 
     # Hyperparameters
     NUM_EPISODES = 10000
-    STEPS_PER_EP = 200
+    STEPS_PER_EP = 50
     GAMMA = 0.99
-    LR = 1e-4
+    LR = 5e-4
     NUM_QUBITS = 4
     DEVICE = torch.device("cpu")
 
