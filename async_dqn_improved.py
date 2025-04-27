@@ -226,7 +226,7 @@ if __name__ == "__main__":
     policy_net.share_memory()
     target_net.share_memory()
 
-    optimizer = optim.Adam(policy_net.parameters(), lr=3e-4)
+    optimizer = optim.Adam(policy_net.parameters(), lr=1e-4)
 
     queue = mp.Queue()
     action_map = create_action_map(NUM_QUBITS)
@@ -235,7 +235,7 @@ if __name__ == "__main__":
         'NUM_QUBITS': NUM_QUBITS,
         'ACTION_DIM': ACTION_DIM,
         'MAX_EPISODES': 10000,
-        'MAX_STEPS': 200,
+        'MAX_STEPS': 100,
         'MAX_GRAD_STEPS': 50000,
         'BATCH_SIZE': 512,
         'GAMMA': 0.99,
