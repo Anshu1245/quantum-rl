@@ -86,6 +86,7 @@ def worker(policy_net, queue, worker_id, args, action_map):
         circuit = init_circuit(action_map, d, num_qubits)
         state = torch.Tensor(circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits)).float().to(device)
 
+        ep_reward = 0
         for step in range(args['MAX_STEPS']):
             with torch.no_grad():
                 if random.random() < epsilon:
@@ -107,8 +108,8 @@ def worker(policy_net, queue, worker_id, args, action_map):
                 reward = 100
                 print("yayyyy")
 
-            reward += 0.1 * compute_similarity(operator, num_qubits)
-
+            reward += compute_similarity(operator, num_qubits)
+            ep_reward += reward
 
             queue.put((state.cpu().numpy(), action.item(), reward, next_state.cpu().numpy(), done))
 
@@ -118,6 +119,7 @@ def worker(policy_net, queue, worker_id, args, action_map):
             state = next_state
             circuit = next_circuit
 
+        # print(f"Worker {worker_id} Episode {episode}: Reward {ep_reward:.2f}", flush=True)
         epsilon = max(args['EPSILON_END'], epsilon * args['EPSILON_DECAY'])
 
 # --- Evaluation ---

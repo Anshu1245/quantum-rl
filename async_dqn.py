@@ -147,6 +147,9 @@ def evaluate(policy_net, action_map, d, num_qubits, eval_episodes=10, eval_steps
 # --- Learner Process ---
 
 def learner(policy_net, target_net, optimizer, queue, args, action_map):
+    import time
+    start_time = time.time()
+
     print("Learner started", flush=True)
     device = torch.device("cpu")
     buffer = deque(maxlen=args['REPLAY_SIZE'])
@@ -194,8 +197,8 @@ def learner(policy_net, target_net, optimizer, queue, args, action_map):
             print(f"Eval at step {steps}: Success Rate {success_rate:.2f}", flush=True)
             if success_rate >= success_threshold:
                 d += 1
-                print(f"Difficulty increased to {d} at step {steps}!", flush=True)
-
+                elapsed_time = time.time() - start_time
+                print(f"Difficulty increased to {d} at step {steps}! | Elapsed time: {elapsed_time/60:.2f} mins | Num workers: {args['NUM_WORKERS']}", flush=True)
         steps += 1
 
 # --- Main ---
