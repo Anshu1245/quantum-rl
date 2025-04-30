@@ -19,9 +19,9 @@ def create_action_map(num_qubits):
     for s in range(num_qubits, 2 * num_qubits):
         action_map[s] = ("S", s - num_qubits)
     cx_index = 2 * num_qubits
-    for control in range(num_qubits-1):
-        action_map[cx_index] = ("CX", [control, control+1])
-        action_map[cx_index+num_qubits-1] = ("CX", [control+1, control])
+    for control in range(num_qubits - 1):
+        action_map[cx_index] = ("CX", [control, control + 1])
+        action_map[cx_index + num_qubits - 1] = ("CX", [control + 1, control])
         cx_index += 1
     return action_map
 
@@ -55,38 +55,39 @@ class DQN(nn.Module):
         self.net = nn.Sequential(
             layer_init(nn.Conv2d(4, 128, 3, padding=1)),
             nn.ReLU(),
-            nn.MaxPool2d(2,2),
+            nn.MaxPool2d(2, 2),
             layer_init(nn.Conv2d(128, 512, 3, padding=1)),
             nn.ReLU(),
-            nn.MaxPool2d(2,2),
+            nn.MaxPool2d(2, 2),
             nn.Flatten(),
-            layer_init(nn.Linear(512 * (num_qubits//4) * (num_qubits//4), 256)),
+            layer_init(nn.Linear(512 * (num_qubits // 4) * (num_qubits // 4), 256)),
             nn.ReLU(),
             layer_init(nn.Linear(256, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, action_dim))
         )
-        
+
     def forward(self, x):
         return self.net(x)
 
 # --- Worker Process ---
 
-def worker(policy_net, queue, worker_id, args, action_map):
+def worker(policy_net, queue, worker_id, args, action_map, difficulty):
     print(f"Worker {worker_id} started", flush=True)
     device = torch.device("cpu")
     num_qubits = args['NUM_QUBITS']
     epsilon = args['EPSILON_START']
-    d = 1
 
-    for episode in range(args['MAX_EPISODES'] // args['NUM_WORKERS']):
+    # for episode in range(args['MAX_EPISODES'] // args['NUM_WORKERS']):
+    while True:
+        d = difficulty.value  # Read shared difficulty
         circuit = init_circuit(action_map, d, num_qubits)
         state = torch.Tensor(circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits)).float().to(device)
 
         for step in range(args['MAX_STEPS']):
             with torch.no_grad():
                 if random.random() < epsilon:
-                    action = torch.randint(0, args['ACTION_DIM'], (1,1))
+                    action = torch.randint(0, args['ACTION_DIM'], (1, 1))
                 else:
                     q_values = policy_net(state)
                     action = q_values.argmax(dim=1, keepdim=True)
@@ -96,10 +97,9 @@ def worker(policy_net, queue, worker_id, args, action_map):
             next_circuit = circuit.compose(c_)
             next_state = torch.Tensor(next_circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits)).float().to(device)
 
-            reward = -1 if action.item() < 2*num_qubits else -10
+            reward = -1 if action.item() < 2 * num_qubits else -10
             done = False
-            operator = next_state
-            if (operator.cpu().numpy().reshape(2*num_qubits, 2*num_qubits) == np.identity(2*num_qubits)).all():
+            if (next_state.cpu().numpy().reshape(2 * num_qubits, 2 * num_qubits) == np.identity(2 * num_qubits)).all():
                 done = True
                 reward = 100
 
@@ -134,7 +134,7 @@ def evaluate(policy_net, action_map, d, num_qubits, eval_episodes=10, eval_steps
                 next_circuit = circuit.compose(c_)
                 next_state = torch.Tensor(next_circuit.symplectic_matrix.reshape(1, 4, num_qubits, num_qubits)).float().to(device)
 
-                if (next_state.cpu().numpy().reshape(2*num_qubits, 2*num_qubits) == np.identity(2*num_qubits)).all():
+                if (next_state.cpu().numpy().reshape(2 * num_qubits, 2 * num_qubits) == np.identity(2 * num_qubits)).all():
                     success_count += 1
                     break
 
@@ -146,14 +146,13 @@ def evaluate(policy_net, action_map, d, num_qubits, eval_episodes=10, eval_steps
 
 # --- Learner Process ---
 
-def learner(policy_net, target_net, optimizer, queue, args, action_map):
+def learner(policy_net, target_net, optimizer, queue, args, action_map, difficulty):
     import time
     start_time = time.time()
 
     print("Learner started", flush=True)
     device = torch.device("cpu")
     buffer = deque(maxlen=args['REPLAY_SIZE'])
-    d = 1
     success_threshold = 0.8
     eval_interval = 1
     steps = 0
@@ -193,12 +192,32 @@ def learner(policy_net, target_net, optimizer, queue, args, action_map):
             print(f"Learner Step {steps}: Loss {loss.item():.4f}", flush=True)
 
         if steps % eval_interval == 0 and steps > 0:
+            with difficulty.get_lock():
+                d = difficulty.value
             success_rate = evaluate(policy_net, action_map, d, args['NUM_QUBITS'])
             print(f"Eval at step {steps}: Success Rate {success_rate:.2f}", flush=True)
             if success_rate >= success_threshold:
-                d += 1
-                elapsed_time = time.time() - start_time
-                print(f"Difficulty increased to {d} at step {steps}! | Elapsed time: {elapsed_time/60:.2f} mins | Num workers: {args['NUM_WORKERS']}", flush=True)
+                with difficulty.get_lock():
+                    difficulty.value += 1
+                    new_d = difficulty.value
+
+                # Clear the queue to flush old data
+                flushed = 0
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                        flushed += 1
+                    except:
+                        break
+                
+                buffer.clear()
+                print("Replay buffer cleared due to difficulty increase.", flush=True)
+
+                print(f"Difficulty increased to {new_d} at step {steps}! "
+                    f"Flushed {flushed} items from queue. "
+                    f"| Elapsed time: {(time.time() - start_time)/60:.2f} mins "
+                    f"| Num workers: {args['NUM_WORKERS']}", flush=True)
+
         steps += 1
 
 # --- Main ---
@@ -227,6 +246,8 @@ if __name__ == "__main__":
     queue = mp.Queue()
     action_map = create_action_map(NUM_QUBITS)
 
+    difficulty = mp.Value('i', 1)  # Shared difficulty variable
+
     args = {
         'NUM_QUBITS': NUM_QUBITS,
         'ACTION_DIM': ACTION_DIM,
@@ -246,11 +267,11 @@ if __name__ == "__main__":
     processes = []
 
     for worker_id in range(NUM_WORKERS):
-        p = mp.Process(target=worker, args=(policy_net, queue, worker_id, args, action_map))
+        p = mp.Process(target=worker, args=(policy_net, queue, worker_id, args, action_map, difficulty))
         p.start()
         processes.append(p)
 
-    p = mp.Process(target=learner, args=(policy_net, target_net, optimizer, queue, args, action_map))
+    p = mp.Process(target=learner, args=(policy_net, target_net, optimizer, queue, args, action_map, difficulty))
     p.start()
     processes.append(p)
 
