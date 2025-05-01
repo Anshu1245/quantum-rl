@@ -278,5 +278,8 @@ if __name__ == "__main__":
     for p in processes:
         p.join()
 
+    queue.close()
+    queue.join_thread()
+
     torch.save(policy_net.state_dict(), "parallel_dqn_policy.pth")
     print("Training Complete!")
